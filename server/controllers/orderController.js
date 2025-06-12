@@ -1,7 +1,7 @@
 import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import User from "../models/user.js";
-import stripe from "stripe";
+import stripePkg from "stripe";
 
 export const placeOrderCOD = async (req, res) => {
   try {
@@ -62,7 +62,7 @@ export const placeOrderStripe = async (req, res) => {
       paymentType: "Online",
     });
 
-    const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
+    const stripeInstance = new stripePkg(process.env.STRIPE_SECRET_KEY);
 
     const line_items = productData.map((item) => {
       return {
@@ -96,38 +96,59 @@ export const placeOrderStripe = async (req, res) => {
 };
 
 export const stripeWebhooks = async (req, res) => {
-  const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
   const sig = req.headers["stripe-signature"];
   let event;
 
   try {
+    // ตรวจลายเซ็น + ใช้ raw body
     event = stripeInstance.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
   } catch (error) {
-    console.error("Webhook error:", error.message);
+    console.error("❌ Webhook signature error:", error.message);
     return res.status(400).send(`Webhook Error: ${error.message}`);
   }
 
   switch (event.type) {
     case "checkout.session.completed": {
-      const session = event.data.object;
-      const orderId = session.metadata.orderId;
-      const userId = session.metadata.userId;
+      console.log("✅ Webhook: checkout.session.completed received");
 
-      await Order.findByIdAndUpdate(orderId, { isPaid: true });
-      await User.findByIdAndUpdate(userId, { cartItems: {} });
+      const session = event.data.object;
+      const metadata = session.metadata || {};
+
+      const orderId = metadata.orderId;
+      const userId = metadata.userId;
+
+      console.log("🧾 OrderID:", orderId);
+      console.log("👤 UserID:", userId);
+
+      if (!orderId || !userId) {
+        console.warn("⚠️ Metadata missing. Order or User ID not found.");
+        return res.status(400).send("Metadata is missing");
+      }
+
+      try {
+        await Order.findByIdAndUpdate(orderId, { isPaid: true });
+        await User.findByIdAndUpdate(userId, { cartItems: {} });
+
+        console.log("✅ Order updated and user cart cleared.");
+      } catch (error) {
+        console.error("❌ Error updating DB:", error.message);
+        return res.status(500).send("Database update failed");
+      }
+
       break;
     }
+
     default:
-      console.log(`Unhandled event type: ${event.type}`);
+      console.log(`🔸 Unhandled event type: ${event.type}`);
+      break;
   }
 
   res.json({ received: true });
 };
-
 
 export const getUserOrders = async (req, res) => {
   try {
